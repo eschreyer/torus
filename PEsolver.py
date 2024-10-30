@@ -11,6 +11,7 @@ import atomic_species as at
 import scipy.integrate as sp_int
 import scipy.interpolate as sp_intpl
 import constants as const
+import pandas as pd
 
 #constants
 c = 2.9979e10
@@ -44,17 +45,16 @@ def get_phion_rates(species, stellar_spectrum):
     return phion_rates
 
 #get helium triplet state photoionization rate
+#ionization data from Norcross (1971)
 def get_triplet_rate(stellar_spectrum):
+    
     F_nu, nu = stellar_spectrum['F_nu'][::-1], stellar_spectrum['nu'][::-1]
-    ss_intpl = sp_intpl.InterpolatedUnivariateSpline(nu, F_nu)
-    data = pd.read_csv('HeMetastableData.csv', skiprows = 1)
-    w = c / (data['wvl'].values * 1e-8)
-    print(w)
-    print(nu)
-    print(data['wvl'])
-    xs = sp_intpl.InterpolatedUnivariateSpline(w, data['sigma'].values * 8.067e-18)
-    phion_rate = sp_int.quad(lambda nu : ss_intpl(nu) * xs(nu) / (const.h * nu), a = nu.values[0], b = nu.values[-1])
-    return phion_rate[0]
+    xs_He3_data = pd.read_csv('HeMetastableData.csv', skiprows = 1)
+    w = c / (xs_He3_data['wvl'].values * 1e-8)
+    F_w = np.interp(w, nu, F_nu)
+    He3_phion_rate = sp_int.simpson(F_w * xs_He3_data['sigma'].values * 8.067e-18 / (const.h * w), x = w)
+    
+    return He3_phion_rate
 
 #get recombination rate from chianti
 def get_rr_rates(species, T):
@@ -70,6 +70,9 @@ def get_rr_rates(species, T):
         rr_rates[i] = ion.RecombRate['rate'][0]
 
     return rr_rates
+
+def Arrhenius(A, B, C, T):
+    return A * T**B * np.exp(-C / T)
 
 #photoionization solver hydrogen
 xs_phot = 6.3e-18
@@ -114,37 +117,37 @@ class HePhESolver:
 
 
     def calculate_abundances(self, T):
-        #constants (note these are at 10^4K)
-        #NOTE: can put in temperature dependance
+        
+        #electron/hydrogen collisional population/depopulation rates
+        q13a = Arrhenius(7.79e-7, -0.531, 2.305395e5, T)   #cm^3s^-1 He11S -> He23S #Matthaus
+        q31a = Arrhenius(3.78e-5, -0.69, 1.015499e4, T)    #cm^3s^-1 He23S -> He21S #Matthaus
+        q31b = Arrhenius(1.52e-6, -0.438, 1.693126e4, T)   #cm^3s^-1 He23S -> He21P #Matthaus
+        Q31 = 5e-10    #cm^3s^-1 He23S -> He11S
 
-        #electron/hydrogen collisional depopulation rates
-        q13a = 4.5e-20 #cm^3s^-1
-        q31a = 2.6e-8  #cm^3s^-1
-        q31b = 4.0e-9  #cm^3s^-1
-        Q31 = 5e-10    #cm^3s^-1
+        #radiative decay 
         A31 = 1.272e-4 #s^-1
 
         #photoionization rates
         phi1 = get_phion_rates('he', self.stellar_spectrum)[0]
-        phi3 = get_phion_rates('he', self.stellar_spectrum)[0]
-        phiHII = get_phion_rates('he', self.stellar_spectrum)[1]
+        phi3 = get_triplet_rate(self.stellar_spectrum)
+        phiHeII = get_phion_rates('he', self.stellar_spectrum)[1]
 
         #recombination rates
-        alpha1 = 2.16e-13  #use case A
-        alpha3 = 2.25e-13  #check recombination values
-        alphaHIII = get_rr_rates('he', np.float64(T))[1]
+        alpha1 = Arrhenius(2.20e-10, -0.678, 0, T) - Arrhenius(2.717e-10, -0.778, 0, T)   #from Benjamin 1999, case A He+ -> He minus amount into triplet
+        alpha3 = Arrhenius(2.717e-10, -0.778, 0, T)  #Allan
+        alphaHeIII = get_rr_rates('he', np.float64(T))[1]
 
         M = np.zeros((4, 4))
         M[0, :] = np.array([-self.ne * alpha1 - phi1 - q13a * self.ne, -self.ne * alpha1 + A31 + q31a * self.ne + q31b * self.ne + Q31 * self.nHI, 0, -self.ne * alpha1])
         M[1, :] = np.array([-self.ne * alpha3 + q13a * self.ne, -self.ne * alpha1 - phi3 - A31 - q31a * self.ne - q31b * self.ne - Q31 * self.nHI, 0, -self.ne * alpha3])
-        M[2, :] = np.array([0, 0, phiHII, - alphaHIII * self.ne])
+        M[2, :] = np.array([0, 0, phiHeII, - alphaHeIII * self.ne])
         M[3, :] = np.ones(4)
 
         o = np.array([-self.ne * alpha1, -self.ne * alpha3, 0, 1])
 
         abundances = np.linalg.solve(M, o)
 
-        return abundances
+        return abundances  
 
 #all other elements
 class PhESolver:
