@@ -14,7 +14,7 @@ G = 6.67e-8
 
 
 class Torus:
-    def __init__(self, species, stellar_spectrum, Ms, Rs, ap, T, Rtorus, i, tau=0, nH=0, calculate_abundances=True):
+    def __init__(self, species, stellar_spectrum, Ms, Rs, ap, T, Rtorus, orb_el=(0, 0, 0, 1), tau=0, nH=0, calculate_abundances=True):
         self.species = species  # dictionary of species with abundances relative to hydrogen
         self.species_ion_abundances = {}  # dictionary of ion abundances to be filled in
         self.stellar_spectrum = stellar_spectrum
@@ -23,8 +23,8 @@ class Torus:
         self.ap = ap
         self.T = T
         self.Rtorus = Rtorus
+        self.orb_el = orb_el
         self.D = self.Rtorus[1] - self.Rtorus[0]
-        self.i = i
 
         # on initialization, we calculate the hydrogen state abundances. In order to do this, we need either an number density of hydrogen or a optical depth
         gamma = pe.get_phion_rates('h', self.stellar_spectrum)[0]
@@ -88,7 +88,7 @@ class Torus:
             self.species_ion_abundances[sp] = ion_abundances
 
     def calculate_column_density(self, species_state):
-        if species_state == 'he_triplet':
+        if species_state == 'he_1':
             ncol = self.nH * self.species['he'] * self.species_ion_abundances['he'][1] * self.D
             return ncol
         species, ionic_state = species_state.partition('_')[0], int(species_state.partition('_')[2])
@@ -99,7 +99,7 @@ class Torus:
             print("the ionic abundances for this species has not been calculated yet")
 
     def calculate_tau_species(self, species_state, nlines=10):
-        if species_state == 'he_triplet':
+        if species_state == 'he_1':
             tau = self.nH * self.species['he'] * self.species_ion_abundances['he'][1] * xs.He_triplet_xsection_atlc(self.T) * self.D
             return tau
         species, ionic_state = species_state.partition('_')[0], int(species_state.partition('_')[2])
@@ -110,8 +110,20 @@ class Torus:
             return tau, wvl
         else:
             print("the ionic abundances for this species has not been calculated yet")
+
+    def get_optical_depth(self, species_state, lines, wav):
+        
+        species, ionic_state = species_state.partition('_')[0], int(species_state.partition('_')[2])
+        xs1 = xs.xsection(species_state, species)
+        
+        #get optical depth
+        w = c / wav
+        Ncol = self.calculate_column_density(species_state)
+        tau = Ncol * xs1.get_xs_lines(lines, w, 0, self.T)
+
+        return Ncol,tau 
     
-    def do_transit(self, species_state, lines, wavgrid, flux_map, xgrid_size=50):
+    def do_transit(self, species_state, lines, wavgrid, flux_map, xgrid_size=50, indexing='math'):
 
         species, ionic_state = species_state.partition('_')[0], int(species_state.partition('_')[2])
         xs1 = xs.xsection(species_state, species)
@@ -122,9 +134,14 @@ class Torus:
         star_z = np.linspace(-self.Rs, self.Rs, grid_size)
         star_y = np.linspace(-self.Rs, self.Rs, grid_size)
 
+        #disk orientation rotation angles, R=Rx(g)Ry(b)Rz(a), rotations anti-clockwise (right hand rule)
+        a, b, g = self.orb_el[0], self.orb_el[1], self.orb_el[2]
+        cos_i = np.cos(a) * np.sin(b) * np.cos(g) + np.sin(a) * np.sin(g)
+        sin_i = np.sqrt(1 - cos_i**2)
+
         #xgrid extends out towards observer
-        Rin_grid = self.Rtorus[0]*np.sin(self.i) - self.get_H()*np.cos(self.i)
-        Rout_grid = self.Rtorus[1]*np.sin(self.i) + self.get_H()*np.cos(self.i)
+        Rin_grid = self.Rtorus[0]*sin_i - self.get_H()*cos_i
+        Rout_grid = self.Rtorus[1]*sin_i + self.get_H()*cos_i
         xgrid = np.linspace(0.9*Rin_grid, 1.1*Rout_grid, xgrid_size)  
         dx = xgrid[1] - xgrid[0]
         
@@ -135,16 +152,17 @@ class Torus:
         star_z = np.linspace(-self.Rs, self.Rs, grid_size)
         xx, yy, zz = np.meshgrid(xgrid, star_y, star_z, indexing='ij')
 
-        #coordinates in orbital plane of disk 
-        yy_p = yy
-        zz_p = xx * np.cos(self.i) + zz * np.sin(self.i)
-        xx_p = xx * np.sin(self.i) - zz * np.cos(self.i)
+        #disk coordinates 
+        xx_p = xx * np.cos(a) * np.cos(b) + yy * np.sin(a) * np.cos(b) - zz * np.sin(b)
+        yy_p = xx * (np.cos(a) * np.sin(b) * np.sin(g) - np.sin(a) * np.cos(g)) + yy * (np.sin(a) * np.sin(b) * np.sin(g) + np.cos(a) * np.cos(g)) + zz * np.cos(b) * np.sin(g)
+        zz_p = xx * (np.cos(a) * np.sin(b) * np.cos(g) + np.sin(a) * np.sin(g)) + yy * (np.sin(a) * np.sin(b) * np.cos(g) - np.cos(a) * np.sin(g)) + zz * np.cos(b) * np.cos(g)
 
         #cylindrical r coordinate
         R_p = np.sqrt(yy_p**2 + xx_p**2)
 
         #los velocity in observer frame
-        ux = self.omega_k(R_p) * yy_p * np.sin(self.i)
+        #orb_el[2] = 1 if rotation anti-clockwise, -1 if rotation clockwise
+        ux = self.omega_k(R_p) * (-yy_p * np.cos(a) * np.cos(b) + xx_p * (np.cos(a) * np.sin(b) * np.sin(g) - np.sin(a) * np.cos(g))) * self.orb_el[3]
 
         #evaluation grid
         dtau_eval_grid = np.tile(np.where(star_grid.intensity > 0, 1, 0), (np.shape(xgrid)[0], 1, 1))  # not on star
@@ -153,13 +171,17 @@ class Torus:
         dtau_eval_grid = np.tile(np.expand_dims(dtau_eval_grid, axis=-1), len(wgrid)).astype(bool)
 
         #dtau grid
-        if lines=='he_3-0' or 'he_3-1' or 'he_3-2' or 'he_32-0' or 'he_32-1' or 'he_32-2':
+        if set(lines).issubset(['he_3-0','he_3-1','he_3-2','he_32-0','he_32-1','he_32-2']):
             dtau_grid = self.nH * self.species[species] * self.species_ion_abundances[species][1] * xs1.get_xs_lines(lines, wgrid, np.expand_dims(ux, axis=-1), self.T, where=dtau_eval_grid, out=np.zeros(np.shape(ux) + np.shape(wgrid))) * dx
         else:
             dtau_grid = self.nH * self.species[species] * self.species_ion_abundances[species][ionic_state-1] * xs1.get_xs_lines(lines, wgrid, np.expand_dims(ux, axis=-1), self.T, where=dtau_eval_grid, out=np.zeros(np.shape(ux) + np.shape(wgrid))) * dx
         
         #optical depth
         tau = np.sum(dtau_grid, axis=0)
+
+        #change to image coordinates
+        if indexing=='image':
+            tau = np.einsum('ijk -> jik', tau)
 
         #observed intensity
         intensity = np.einsum('ij, ijk -> k', flux_map, np.exp(-tau))

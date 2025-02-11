@@ -1,9 +1,7 @@
 import numpy as np
 from astropy.io import fits
-import pandas as pd
 import constants as const
 import astropy.units as u
-import astropy.constants as astr_const
 import os
 import scipy.integrate as sp_int
 
@@ -56,21 +54,12 @@ class stellar_spectra:
 
     def __init__(self, stellar_type, semi_major_axis=1, stellar_radius=None, Lbol=None):
 
-        #d is the distance to the star
-        #normfac = (d * 206265)**2 
-
-        #if fits: #if muscles file 
-            
-        #spec_data = fits.getdata(file, 1)
-        #self.spec = {'wl':(spec_data['WAVELENGTH']*input_units[0]).to(u.cm), 'F_wl':(normfac * spec_data['Flux']*input_units[1]).to(u.erg/u.cm**3/u.s)}
-        
         self.spec = self.standard_spectrum(stellar_type, semi_major_axis, stellar_radius=stellar_radius, Lbol=Lbol)
         nu, F_nu = wav2nu(self.spec['wl'].value, self.spec['F_wl'].value)
         self.spec['nu'], self.spec['F_nu'] = nu / u.s, F_nu * u.erg / u.cm**2
 
         #pwinds spectra
         
-            
         
     def get_spectrum(self, units=None):
 
@@ -79,16 +68,39 @@ class stellar_spectra:
         else:
             return {k: v.value for k,v in self.spec.items()}
 
-    def get_rescaled_spectrum(self, norm_wav, norm_flux, rescale_all=False, units=[u.cm, u.erg / u.s / u.cm**3, 1 / u.s, u.erg / u.cm**2]):
+    def get_rescaled_spectrum(self, norm_wav, norm_flux, rescale_rng='norm', units=[u.cm, u.erg / u.s / u.cm**3, 1 / u.s, u.erg / u.cm**2]):
         
         spectrum = self.get_spectrum(units=units)
         mask = (spectrum['wl'] > norm_wav[0]) & (spectrum['wl'] < norm_wav[1])
         norm_fac = norm_flux / sp_int.trapezoid(spectrum['F_wl'][mask], spectrum['wl'][mask]) #flux in bin / flux meant to be in bin
 
-        if not rescale_all:
-            return {k: (np.where(mask, self.spec[k]*norm_fac, self.spec[k]).to(units[i]).value if k == ('F_wl' or 'F_nu') else self.spec[k].to(units[i]).value) for i,k in enumerate(self.spec)}
+        if rescale_rng=='norm':
+            return {k: (np.where(mask, self.spec[k]*norm_fac, self.spec[k]).to(units[i]).value if k in ('F_wl','F_nu') else self.spec[k].to(units[i]).value) for i,k in enumerate(self.spec)}
+        elif rescale_rng=='all':
+            return {k : (self.spec[k].to(units[i]).value*norm_fac if k in ('F_wl', 'F_nu')  else self.spec[k].to(units[i]).value) for i,k in enumerate(self.spec)}
         else:
-            return {k : (self.spec[k].to(units[i]).value*norm_fac if k == ('F_wl' or 'F_nu')  else self.spec[k].to(units[i]).value) for i,k in enumerate(self.spec)} 
+            rescale_rng_mask = (spectrum['wl'] > rescale_rng[0]) & (spectrum['wl'] < rescale_rng[1])
+            return {k: (np.where(rescale_rng_mask, self.spec[k]*norm_fac, self.spec[k]).to(units[i]).value if k in ('F_wl','F_nu') else self.spec[k].to(units[i]).value) for i,k in enumerate(self.spec)}
+        
+    def modify_spectrum(self, norm_wav, norm_flux, rescale_rng='norm'):
+
+        mask = (self.spec['wl'].value > norm_wav[0]) & (self.spec['wl'].value < norm_wav[1])
+        norm_fac = norm_flux / sp_int.trapezoid(self.spec['F_wl'][mask].value, self.spec['wl'][mask].value) #flux in bin / flux meant to be in bin
+
+        if rescale_rng=='norm':
+            self.spec = {k: (np.where(mask, self.spec[k]*norm_fac, self.spec[k])) if k in ('F_wl','F_nu') else self.spec[k] for i,k in enumerate(self.spec)}
+        elif rescale_rng=='all':
+            self.spec = {k : self.spec[k]*norm_fac if k in ('F_wl', 'F_nu')  else self.spec[k] for i,k in enumerate(self.spec)}
+        else:
+            rescale_rng_mask = (self.spec['wl'].value > rescale_rng[0]) & (self.spec['wl'].value < rescale_rng[1])
+            self.spec = {k: (np.where(rescale_rng_mask, self.spec[k]*norm_fac, self.spec[k])) if k in ('F_wl','F_nu') else self.spec[k] for i,k in enumerate(self.spec)}
+        
+    def get_flux_in_bin(self, wav, units=[u.cm, u.erg / u.s / u.cm**3, 1 / u.s, u.erg / u.cm**2]):
+
+        spectrum = self.get_spectrum(units=units)
+        mask = (spectrum['wl'] > wav[0]) & (spectrum['wl'] < wav[1])
+        flux = sp_int.trapezoid(spectrum['F_wl'][mask], spectrum['wl'][mask]) 
+        return flux
 
     #copied from pwinds
     def standard_spectrum(self, stellar_type, semi_major_axis,
@@ -305,50 +317,55 @@ class stellar_spectra:
         thresh = cutoff_thresh * u.eV
         stars = [
             # Old ones
-            'gj176', 'gj436', 'gj551', 'gj581', 'gj667c', 'gj832', 'gj876',
-            'gj1214', 'hd40307', 'hd85512', 'hd97658', 'v-eps-eri',
+            'gj176', 'gj436', 'gj551', 'gj581', 'gj667c', 
+            'gj832', 'gj876', 'gj1214', 'hd40307', 'hd85512', 
+            'hd97658', 'v-eps-eri',
             # New ones
             #'gj15a', 'gj163', 'gj649', 'gj674', 'gj676a', 'gj699', 'gj729', 'gj849',
-            'gj1132', 'hat-p-12', 'hat-p-26', 'hd-149026', 'l-98-59', 'l-678-39',
-            'l-980-5', 'lhs-2686', 'lp-791-18', 'toi-193', 'trappist-1', 'wasp-17',
-            'wasp-43', 'wasp-77a', 'wasp-127'
+            'gj1132', 'hat-p-12', 'hat-p-26', 'hd-149026', 'l-98-59', 
+            'l-678-39', 'l-980-5', 'lhs-2686', 'lp-791-18', 'toi-193', 
+            'trappist-1', 'wasp-17', 'wasp-43', 'wasp-77a', 'wasp-127'
             ]
         versions = np.array([
             # Old ones
-            'v22', 'v22', 'v22', 'v22', 'v22', 'v22', 'v22',
-            'v22', 'v22', 'v22', 'v22', 'v22',
+            'v22', 'v22', 'v22', 'v22', 'v22', 
+            'v22', 'v22', 'v22', 'v22', 'v22', 
+            'v22', 'v22',
             # New ones
             #'v23', 'v23', 'v23', 'v23', 'v23', 'v23', 'v23', 'v23',
-            'v23', 'v24', 'v24', 'v24', 'v24', 'v24',
-            'v23', 'v23', 'v24', 'v24', 'v23', 'v24',
-            'v24', 'v24', 'v24'
+            'v23', 'v24', 'v24', 'v24', 'v24', 
+            'v24', 'v23', 'v23', 'v24', 'v24', 
+            'v23', 'v24', 'v24', 'v24', 'v24'
             ])
         st_rads = np.array([
             # Old ones
-            0.46, 0.449, 0.154, 0.3297020, 0.42, 0.45, 0.35, 0.22,
-            0.71, 0.69, 0.74, 0.77,
+            0.46, 0.449, 0.154, 0.3297020, 0.42,
+            0.45, 0.35, 0.22, 0.71, 0.69, 
+            0.74, 0.77,
             # New ones
-            0.21, 0.7, 0.87, 1.41, 0.3, 0.34,
-            0.22,  # L 980-5 radius assumed to be the same as GJ 1214
-            0.449,  # LHS 2686 radius assumed to be the same as GJ 436
-            0.18, 0.95, 0.12, 1.49, 0.6, 0.910, 1.33
-        ]) * u.solRad
+            0.21, 0.7, 0.87, 1.41, 0.3, 
+            0.34, 0.22, 0.449, 0.18, 0.95, 
+            0.12, 1.49, 0.6, 0.910, 1.33 # 1 L 980-5 radius assumed to be the same as GJ 1214 # LHS 2686 radius assumed to be the same as GJ 436
+            ]) * u.solRad
         dists = np.array([
             # Old ones
-            9.470450, 9.75321, 1.30119, 6.298100, 7.24396, 4.964350,
-            4.67517, 14.6427, 12.9363, 11.2810, 21.5618,
-            3.20260,
+            9.470450, 9.75321, 1.30119, 6.298100, 7.24396, 
+            4.964350, 4.67517, 14.6427, 12.9363, 11.2810, 
+            21.5618, 3.20260,
             # New ones
             #3.56244, 15.1353,
-            12.613, 142.751, 141.837, 75.8643, 10.6194, 9.44181, 13.3731, 12.1893,
-            26.4927, 80.4373, 12.4298888, 405.908, 86.7467, 105.6758, 159.507
-        ]) * u.pc
-        Lbols = np.array([1, 10**-1.63, 1, 1, 1, 1, 1,
-            1, 1, 1, 10**-0.83, 1,
-            1, 1, 1, 10**0.42, 1, 1,
-            1, 1, 1, 10**-0.15, 10**-3.26, 10**0.61,
-            10**-0.83, 1, 1
-        ])
+            12.613, 142.751, 141.837, 75.8643, 10.6194, 
+            9.44181, 13.3731, 12.1893, 26.4927, 80.4373, 
+            12.4298888, 405.908, 86.7467, 105.6758, 159.507
+            ]) * u.pc
+        Lbols = np.array([
+            1, 10**-1.63, 1, 1, 1, 
+            1, 1, 1, 1, 1, 
+            10**-0.455, 1, 
+            1, 1, 1, 10**0.42, 1, 
+            1, 1, 1, 1, 10**-0.15, 
+            10**-3.26, 10**0.61,10**-0.83, 1, 1
+            ])
 
         muscles_dists = {starname: dist for starname, dist in zip(stars, dists)}
         muscles_rstars = {starname: st_rad for starname, st_rad in zip(stars,
@@ -398,13 +415,9 @@ class stellar_spectra:
 
         #put spectrum into cgs
         if Lbol is None:
-             print(Lbol)
              myspectrum = {'wl': (spectrum['wavelength'] * spectrum['wavelength_unit']).to(u.cm),
                       'F_wl': (spectrum['flux_lambda'] * spectrum['flux_unit']).to(u.erg / u.cm**3 / u.s)} 
         else:
-            print(Lbol)
-            print(bol)
-            print(Lbol/bol)
             myspectrum = {'wl': (spectrum['wavelength'] * spectrum['wavelength_unit']).to(u.cm),
                       'F_wl': (spectrum['flux_lambda'] * spectrum['flux_unit']).to(u.erg / u.cm**3 / u.s)*Lbol/bol} 
 

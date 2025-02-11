@@ -7,6 +7,7 @@ erg = 6.242e11 #eV
 mp = 1.67e-24
 kb = 1.3807e-16
 G = 6.67e-8
+pc = 3.0857e18
 
 """time constants"""
 hour = 3600

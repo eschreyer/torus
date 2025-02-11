@@ -53,6 +53,7 @@ def get_triplet_rate(stellar_spectrum):
     w = c / (xs_He3_data['wvl'].values * 1e-8)
     F_w = np.interp(w, nu, F_nu)
     He3_phion_rate = sp_int.simpson(F_w * xs_He3_data['sigma'].values * 8.067e-18 / (const.h * w), x = w)
+    print(He3_phion_rate)
     
     return He3_phion_rate
 
@@ -85,7 +86,7 @@ def get_ne(nH, gamma, rr):
     return nH - get_nHI(nH, gamma, rr)
 
 def get_tau_phot(nH, gamma, rr, D):
-    return nHI(nH, gamma, rr) * xs_phot * D
+    return get_nHI(nH, gamma, rr) * xs_phot * D
 
 def get_nH(tau, gamma, rr, D):
     return tau / (D * xs_phot) + np.sqrt((tau * gamma) / (rr * D * xs_phot))
@@ -117,11 +118,16 @@ class HePhESolver:
 
 
     def calculate_abundances(self, T):
-        
-        #electron/hydrogen collisional population/depopulation rates
+
+        #electron collisional population rates
         q13a = Arrhenius(7.79e-7, -0.531, 2.305395e5, T)   #cm^3s^-1 He11S -> He23S #Matthaus
+        
+        #electron collisional de-population rates
         q31a = Arrhenius(3.78e-5, -0.69, 1.015499e4, T)    #cm^3s^-1 He23S -> He21S #Matthaus
         q31b = Arrhenius(1.52e-6, -0.438, 1.693126e4, T)   #cm^3s^-1 He23S -> He21P #Matthaus
+        q31c = Arrhenius(2.60e-7, -0.531, 5.4255e2, T)     #cm^3s^-1 He23S -> He11S #Matthaus
+
+        #hydrogen collisional depopulation rate
         Q31 = 5e-10    #cm^3s^-1 He23S -> He11S
 
         #radiative decay 
@@ -138,18 +144,19 @@ class HePhESolver:
         alphaHeIII = get_rr_rates('he', np.float64(T))[1]
 
         M = np.zeros((4, 4))
-        M[0, :] = np.array([-self.ne * alpha1 - phi1 - q13a * self.ne, -self.ne * alpha1 + A31 + q31a * self.ne + q31b * self.ne + Q31 * self.nHI, 0, -self.ne * alpha1])
-        M[1, :] = np.array([-self.ne * alpha3 + q13a * self.ne, -self.ne * alpha1 - phi3 - A31 - q31a * self.ne - q31b * self.ne - Q31 * self.nHI, 0, -self.ne * alpha3])
-        M[2, :] = np.array([0, 0, phiHeII, - alphaHeIII * self.ne])
+        M[0, :] = np.array([-phi1 - q13a * self.ne, A31 + q31a * self.ne + q31b * self.ne + q31c * self.ne + Q31 * self.nHI, alpha1 * self.ne, 0])
+        M[1, :] = np.array([q13a * self.ne, -phi3 - A31 - q31a * self.ne - q31b * self.ne - q31c * self.ne - Q31 * self.nHI, alpha3 * self.ne, 0])
+        M[2, :] = np.array([phi1, phi3, -phiHeII - alpha1 * self.ne - alpha3 * self.ne, alphaHeIII * self.ne])
         M[3, :] = np.ones(4)
 
-        o = np.array([-self.ne * alpha1, -self.ne * alpha3, 0, 1])
+        o = np.array([0, 0, 0, 1])
 
         abundances = np.linalg.solve(M, o)
 
-        return abundances  
+        return abundances    
 
 #all other elements
+
 class PhESolver:
     #class to calculate
     def __init__(self, species, stellar_spectrum, n_e):
