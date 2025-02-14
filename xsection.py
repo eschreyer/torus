@@ -122,7 +122,7 @@ class xsection():
         return Aelem_lc[self.species_base]
     
     def get_xs_species(self, w, absorber_v, T):
-        all_lines = pd.read_csv('../escape_lines.csv')
+        all_lines = pd.read_csv('escape_lines.csv')
         lines = all_lines[all_lines['species']==self.species]
         xs = np.zeros(np.shape(absorber_v)[:-1] + np.shape(w))
 
@@ -133,7 +133,7 @@ class xsection():
         return xs  
     
     def get_xs_lines(self, line_names, w, absorber_v, T, out=None, where=True):
-        all_lines = pd.read_csv('../escape_lines.csv')
+        all_lines = pd.read_csv('escape_lines.csv')
         lines = all_lines[all_lines['name'].isin(line_names)]
         xs = np.zeros(np.shape(absorber_v)[:-1] + np.shape(w))
 
