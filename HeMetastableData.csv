@@ -1,4 +1,4 @@
-#wvl (in Angstrom), #cross section (x 8.0670e-18 cm^2)
+#wvl (in Angstrom), #cross section (x 8.0670e-18 cm^2) #from Norcross (1971)
 wvl,sigma
 2593.01,0.605
 2528.27,0.589
